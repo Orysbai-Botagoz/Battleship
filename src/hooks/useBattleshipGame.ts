@@ -9,6 +9,7 @@ import {
   fireAt,
   placeFleetRandomly,
   placeShip,
+  removeShip as removeShipFromBoard,
   validateFleet,
 } from "@/lib/game";
 import { FLEET_CONFIG } from "@/types/game";
@@ -66,6 +67,15 @@ export function useBattleshipGame() {
     [remainingByLength],
   );
 
+  // Удаление корабля по ID с полным пересчетом сетки доски
+  const removeShip = (shipId: string) => {
+    if (status !== "placement") {
+      return;
+    }
+
+    setPlayerBoard((prevBoard) => removeShipFromBoard(prevBoard, shipId));
+  };
+
   const placeSelectedShipAt = (origin: Coordinate) => {
     if (status !== "placement") {
       return;
@@ -89,7 +99,7 @@ export function useBattleshipGame() {
       length: selectedShipLength,
       axis: orientation,
       origin,
-      id: `player_ship_${playerBoard.ships.length + 1}`,
+      id: `player_ship_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
     } as const;
 
     if (!canPlaceShip(playerBoard, payload)) {
@@ -200,8 +210,10 @@ export function useBattleshipGame() {
       return;
     }
 
-    setActiveSide("ai");
-    setIsAiThinking(true);
+    if (!result.isHit) {
+      setActiveSide("ai");
+      setIsAiThinking(true);
+    }
   };
 
   useEffect(() => {
@@ -241,16 +253,21 @@ export function useBattleshipGame() {
       };
 
       setMoveHistory((prev) => [aiMove, ...prev].slice(0, 60));
-      setIsAiThinking(false);
 
       if (result.gameOver) {
+        setIsAiThinking(false);
         setStatus("lost");
         setActiveSide("ai");
         return;
       }
 
-      setActiveSide("player");
-      setTurn((prev) => prev + 1);
+      if (result.isHit) {
+        setIsAiThinking(true);
+      } else {
+        setIsAiThinking(false);
+        setActiveSide("player");
+        setTurn((prev) => prev + 1);
+      }
     }, 650);
 
     return () => clearTimeout(timeout);
@@ -272,6 +289,7 @@ export function useBattleshipGame() {
     remainingByLength,
     allShipsPlaced,
     placeSelectedShipAt,
+    removeShip,
     autoPlace,
     clearPlacement,
     rotate,

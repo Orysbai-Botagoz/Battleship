@@ -29,6 +29,7 @@ export function GameScreen() {
             onAutoPlace={game.autoPlace}
             onClear={game.clearPlacement}
             onCellTap={game.placeSelectedShipAt}
+            onRemoveShip={game.removeShip}
             onStartBattle={game.startBattle}
             onChangeDifficulty={game.setDifficulty}
           />

@@ -24,7 +24,7 @@ export interface ShotResult {
   blockedCells: Coordinate[];
 }
 
-const isInsideBoard = (coordinate: Coordinate, size = GAME_BOARD_SIZE): boolean => {
+const isInsideBoard = (coordinate: Coordinate, size: number = GAME_BOARD_SIZE): boolean => {
   return (
     coordinate.row >= 0 &&
     coordinate.col >= 0 &&
@@ -52,7 +52,7 @@ const cloneBoard = (board: BoardState): BoardState => ({
   })),
 });
 
-export const createEmptyBoard = (size = GAME_BOARD_SIZE): BoardState => {
+export const createEmptyBoard = (size: number = GAME_BOARD_SIZE): BoardState => {
   const cells: BoardCell[][] = Array.from({ length: size }, (_, row) =>
     Array.from({ length: size }, (_, col) => makeCell(row, col)),
   );
@@ -136,12 +136,11 @@ export const placeShip = (board: BoardState, input: PlaceShipInput): BoardState 
 };
 
 export const clearBoardShips = (board: BoardState): BoardState => {
-  const clean = createEmptyBoard(board.size);
-  return clean;
+  return createEmptyBoard(board.size);
 };
 
 export const placeFleetRandomly = (
-  size = GAME_BOARD_SIZE,
+  size: number = GAME_BOARD_SIZE,
   maxAttempts = 3_000,
 ): BoardState => {
   let board = createEmptyBoard(size);
@@ -196,7 +195,7 @@ export const validateFleet = (board: BoardState): boolean => {
   const seen = new Set<string>();
 
   for (const ship of board.ships) {
-    counts.set(ship.length, (counts.get(ship.length) ?? 0) + 1);
+    counts.set(ship.length as ShipLength, (counts.get(ship.length as ShipLength) ?? 0) + 1);
 
     for (const cell of ship.cells) {
       if (!isInsideBoard(cell, board.size)) {
@@ -336,10 +335,26 @@ export const hasWon = (board: BoardState): boolean => board.remainingShipCells <
 
 export const getOrthogonalNeighbors = (
   coordinate: Coordinate,
-  size = GAME_BOARD_SIZE,
+  size: number = GAME_BOARD_SIZE,
 ): Coordinate[] => {
   return ORTHOGONAL_DIRECTIONS.map((delta) => ({
     row: coordinate.row + delta.row,
     col: coordinate.col + delta.col,
   })).filter((cell) => isInsideBoard(cell, size));
+};
+
+export const removeShip = (board: BoardState, shipId: string): BoardState => {
+  const remainingShips = board.ships.filter((s) => s.id !== shipId);
+  let nextBoard = createEmptyBoard(board.size);
+
+  for (const ship of remainingShips) {
+    nextBoard = placeShip(nextBoard, {
+      id: ship.id,
+      length: ship.length as ShipLength,
+      axis: ship.axis,
+      origin: ship.origin,
+    });
+  }
+
+  return nextBoard;
 };

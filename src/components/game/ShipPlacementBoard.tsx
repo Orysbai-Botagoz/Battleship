@@ -20,6 +20,7 @@ interface ShipPlacementBoardProps {
   onCellTap: (coordinate: Coordinate) => void;
   onStartBattle: () => void;
   onChangeDifficulty: (difficulty: Difficulty) => void;
+  onRemoveShip?: (shipId: string) => void;
 }
 
 const lengths: ShipLength[] = [4, 3, 2, 1];
@@ -38,12 +39,42 @@ export function ShipPlacementBoard({
   onCellTap,
   onStartBattle,
   onChangeDifficulty,
+  onRemoveShip,
 }: ShipPlacementBoardProps) {
   const allPlaced = Object.values(remainingByLength).every((n) => n === 0);
   const [draggedShipId, setDraggedShipId] = useState<string | null>(null);
-  const [dragTargetCoord, setDragTargetCoord] = useState<Coordinate | null>(null);
+  const [hoverCoord, setHoverCoord] = useState<Coordinate | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const gridContainerRef = useRef<HTMLDivElement>(null);
+
+  // Клик по клетке:
+  // Если на клетке уже есть корабль -> удаляем его и выбираем его размер для дальнейшей установки
+  // Если клетка пустая -> пытаемся поставить выбранный корабль
+  const handleCellClick = useCallback(
+    (coord: Coordinate, cellShipId?: string) => {
+      if (cellShipId) {
+        const existingShip = board.ships?.find((s) => s.id === cellShipId);
+        if (existingShip) {
+          onSelectLength(existingShip.length as ShipLength);
+        }
+        if (onRemoveShip) {
+          onRemoveShip(cellShipId);
+        }
+        return;
+      }
+
+      // Если корабли выбранного типа закончились, берем первый доступный из остатков
+      if (remainingByLength[selectedShipLength] === 0) {
+        const availableLength = lengths.find((l) => remainingByLength[l] > 0);
+        if (availableLength) {
+          onSelectLength(availableLength);
+        }
+      }
+
+      onCellTap(coord);
+    },
+    [board.ships, onRemoveShip, onSelectLength, remainingByLength, selectedShipLength, onCellTap],
+  );
 
   const getGridCoordinateFromEvent = useCallback(
     (clientX: number, clientY: number): Coordinate | null => {
@@ -53,55 +84,27 @@ export function ShipPlacementBoard({
       const relX = clientX - rect.left;
       const relY = clientY - rect.top;
 
-      // Get grid dimensions
-      const containerWidth = rect.width;
-      const containerHeight = rect.height;
+      const padding = 8;
+      const gridWidth = rect.width - 2 * padding;
+      const gridHeight = rect.height - 2 * padding;
 
-      // Account for padding
-      const padding = 8; // 2 * 4px (p-2 in Tailwind)
-      const gridWidth = containerWidth - 2 * padding;
-      const gridHeight = containerHeight - 2 * padding;
-
-      // Account for gap between cells
-      const gap = 4; // gap-1 = 0.25rem = 4px
+      const gap = 4;
       const cellsPerRow = board.size;
 
       const totalGapWidth = gap * (cellsPerRow - 1);
-      const totalGapHeight = gap * (board.size - 1);
-
       const cellWidth = (gridWidth - totalGapWidth) / cellsPerRow;
-      const cellHeight = (gridHeight - totalGapHeight) / board.size;
+      const cellHeight = (gridHeight - totalGapWidth) / board.size;
 
       const adjustedX = relX - padding;
       const adjustedY = relY - padding;
 
-      let col = 0;
-      let currentX = 0;
+      let col = Math.floor(adjustedX / (cellWidth + gap));
+      let row = Math.floor(adjustedY / (cellHeight + gap));
 
-      for (let i = 0; i < cellsPerRow; i++) {
-        if (adjustedX < currentX + cellWidth) {
-          col = i;
-          break;
-        }
-        currentX += cellWidth + gap;
-        if (i === cellsPerRow - 1) col = cellsPerRow - 1;
-      }
-
-      let row = 0;
-      let currentY = 0;
-
-      for (let i = 0; i < board.size; i++) {
-        if (adjustedY < currentY + cellHeight) {
-          row = i;
-          break;
-        }
-        currentY += cellHeight + gap;
-        if (i === board.size - 1) row = board.size - 1;
-      }
-
-      if (col < 0 || col >= cellsPerRow || row < 0 || row >= board.size) {
-        return null;
-      }
+      if (col < 0) col = 0;
+      if (col >= cellsPerRow) col = cellsPerRow - 1;
+      if (row < 0) row = 0;
+      if (row >= board.size) row = board.size - 1;
 
       return { row, col };
     },
@@ -111,12 +114,18 @@ export function ShipPlacementBoard({
   const handleDragStart = useCallback(
     (e: React.DragEvent<HTMLDivElement>) => {
       const target = (e.target as HTMLElement).closest("[data-ship-id]");
-      if (!target) return;
+      if (target) {
+        const shipId = target.getAttribute("data-ship-id");
+        if (shipId) {
+          setDraggedShipId(shipId);
+          e.dataTransfer.setData("text/plain", shipId);
+          const ship = board.ships?.find((s) => s.id === shipId);
+          if (ship) {
+            onSelectLength(ship.length as ShipLength);
+          }
+        }
+      }
 
-      const shipId = target.getAttribute("data-ship-id");
-      if (!shipId) return;
-
-      setDraggedShipId(shipId);
       setIsDragging(true);
       e.dataTransfer.effectAllowed = "move";
 
@@ -124,119 +133,76 @@ export function ShipPlacementBoard({
       img.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
       e.dataTransfer.setDragImage(img, 0, 0);
     },
-    [],
+    [board.ships, onSelectLength],
   );
 
-  const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    
-    // Update preview coordinate while dragging
-    const coord = getGridCoordinateFromEvent(e.clientX, e.clientY);
-    setDragTargetCoord(coord);
-  }, [getGridCoordinateFromEvent]);
+  const handleDragOver = useCallback(
+    (e: React.DragEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
 
-  const handleDragLeave = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    // Only clear if we're leaving the grid container
-    if (e.target === e.currentTarget) {
-      setDragTargetCoord(null);
-    }
-  }, []);
+      const coord = getGridCoordinateFromEvent(e.clientX, e.clientY);
+      if (coord) {
+        setHoverCoord(coord);
+      }
+    },
+    [getGridCoordinateFromEvent],
+  );
 
   const handleDrop = useCallback(
     (e: React.DragEvent<HTMLDivElement>) => {
       e.preventDefault();
+      const dropShipId = e.dataTransfer.getData("text/plain") || draggedShipId;
+      const coord = getGridCoordinateFromEvent(e.clientX, e.clientY) || hoverCoord;
 
-      if (!draggedShipId || !dragTargetCoord) return;
+      if (dropShipId && onRemoveShip) {
+        const ship = board.ships?.find((s) => s.id === dropShipId);
+        if (ship) {
+          onSelectLength(ship.length as ShipLength);
+        }
+        onRemoveShip(dropShipId);
+      }
+
+      if (coord) {
+        onCellTap(coord);
+      }
 
       setDraggedShipId(null);
       setIsDragging(false);
-
-      // Use dragTargetCoord which was updated during dragOver
-      onCellTap(dragTargetCoord);
-      
-      setDragTargetCoord(null);
+      setHoverCoord(null);
     },
-    [draggedShipId, dragTargetCoord, onCellTap],
+    [draggedShipId, getGridCoordinateFromEvent, hoverCoord, onRemoveShip, board.ships, onSelectLength, onCellTap],
   );
 
   const handleDragEnd = useCallback(() => {
     setDraggedShipId(null);
-    setDragTargetCoord(null);
+    setHoverCoord(null);
     setIsDragging(false);
   }, []);
-
-  const handleTouchStart = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
-    const target = (e.target as HTMLElement).closest("[data-ship-id]");
-    if (!target) return;
-
-    const shipId = target.getAttribute("data-ship-id");
-    if (!shipId) return;
-
-    setDraggedShipId(shipId);
-    setIsDragging(true);
-    
-    // Set initial target coordinate
-    const touch = e.touches[0];
-    const coord = getGridCoordinateFromEvent(touch.clientX, touch.clientY);
-    setDragTargetCoord(coord);
-  }, [getGridCoordinateFromEvent]);
-
-  const handleTouchMove = useCallback(
-    (e: React.TouchEvent<HTMLDivElement>) => {
-      if (!draggedShipId) return;
-      e.preventDefault();
-      
-      // Update target coordinate while moving
-      const touch = e.touches[0];
-      const coord = getGridCoordinateFromEvent(touch.clientX, touch.clientY);
-      setDragTargetCoord(coord);
-    },
-    [draggedShipId, getGridCoordinateFromEvent],
-  );
-
-  const handleTouchEnd = useCallback(
-    (e: React.TouchEvent<HTMLDivElement>) => {
-      if (!draggedShipId || !dragTargetCoord) return;
-
-      setDraggedShipId(null);
-      setIsDragging(false);
-
-      // Use dragTargetCoord which was updated during touchMove
-      onCellTap(dragTargetCoord);
-      
-      setDragTargetCoord(null);
-    },
-    [draggedShipId, dragTargetCoord, onCellTap],
-  );
 
   return (
     <section className="flex w-full flex-col gap-4 rounded-2xl border border-slate-800 bg-slate-900/70 p-4 sm:p-5">
       <header className="space-y-2">
         <h2 className="text-xl font-semibold text-ocean-200">Расстановка флота</h2>
         <p className="text-sm text-slate-300">
-          Способы размещения: перетащи корабль, нажми на клетку или кликай по кораблю чтобы выбрать.
+          Нажмите на корабль, чтобы удалить его и сразу же поставить в новое место.
         </p>
       </header>
 
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-        {([
-          ["easy", "Easy"],
-          ["medium", "Medium"],
-          ["hard", "Hard"],
-        ] as const).map(([value, label]) => (
+        {(["easy", "medium", "hard"] as const).map((value) => (
           <button
             key={value}
             type="button"
             onClick={() => onChangeDifficulty(value)}
             className={[
-              "rounded-xl border px-3 py-2 text-sm font-medium transition",
+              "rounded-xl border px-3 py-2 text-sm font-medium transition capitalize",
               difficulty === value
                 ? "border-ocean-300 bg-ocean-500/20 text-ocean-100"
                 : "border-slate-700 bg-slate-800/80 text-slate-300",
             ].join(" ")}
           >
-            {label}
+            {value}
           </button>
         ))}
       </div>
@@ -291,22 +257,19 @@ export function ShipPlacementBoard({
         ref={gridContainerRef}
         onDragStart={handleDragStart}
         onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
         onDrop={handleDrop}
         onDragEnd={handleDragEnd}
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
+        className="select-none"
       >
         <ShipPlacementGrid
           board={board}
           orientation={orientation}
           selectedShipLength={selectedShipLength}
           draggedShipId={draggedShipId}
-          dragTargetCoord={dragTargetCoord}
+          hoverCoord={hoverCoord}
           isDragging={isDragging}
-          onCellTap={onCellTap}
-          onToggleOrientation={onToggleOrientation}
+          onCellClick={handleCellClick}
+          setHoverCoord={setHoverCoord}
         />
       </div>
 
@@ -329,10 +292,10 @@ interface ShipPlacementGridProps {
   orientation: Axis;
   selectedShipLength: ShipLength;
   draggedShipId: string | null;
-  dragTargetCoord: Coordinate | null;
+  hoverCoord: Coordinate | null;
   isDragging: boolean;
-  onCellTap: (coordinate: Coordinate) => void;
-  onToggleOrientation: () => void;
+  onCellClick: (coord: Coordinate, shipId?: string) => void;
+  setHoverCoord: (coord: Coordinate | null) => void;
 }
 
 function ShipPlacementGrid({
@@ -340,37 +303,27 @@ function ShipPlacementGrid({
   orientation,
   selectedShipLength,
   draggedShipId,
-  dragTargetCoord,
+  hoverCoord,
   isDragging,
-  onCellTap,
-  onToggleOrientation,
+  onCellClick,
+  setHoverCoord,
 }: ShipPlacementGridProps) {
   const getCellClasses = (state: BoardState["cells"][number][number]["state"]) => {
-    if (state === "hit") {
-      return "bg-rose-500/90 border-rose-300";
-    }
-
-    if (state === "miss" || state === "blocked") {
-      return "bg-slate-700/80 border-slate-600";
-    }
-
-    if (state === "ship") {
-      return "bg-ocean-500/90 border-ocean-300 cursor-grab active:cursor-grabbing";
-    }
-
+    if (state === "hit") return "bg-rose-500/90 border-rose-300";
+    if (state === "miss" || state === "blocked") return "bg-slate-700/80 border-slate-600";
+    if (state === "ship") return "bg-ocean-500/90 border-ocean-300 cursor-grab active:cursor-grabbing";
     return "bg-ocean-950 border-ocean-900";
   };
 
-  // Determine which cells are part of the drag preview
-  const dragPreviewCells = dragTargetCoord && draggedShipId
+  const hoverPreviewCells = hoverCoord
     ? Array.from({ length: selectedShipLength }, (_, i) => ({
-        row: orientation === "horizontal" ? dragTargetCoord.row : dragTargetCoord.row + i,
-        col: orientation === "horizontal" ? dragTargetCoord.col + i : dragTargetCoord.col,
-      }))
+        row: orientation === "horizontal" ? hoverCoord.row : hoverCoord.row + i,
+        col: orientation === "horizontal" ? hoverCoord.col + i : hoverCoord.col,
+      })).filter((c) => c.row >= 0 && c.row < board.size && c.col >= 0 && c.col < board.size)
     : [];
 
-  const isDragPreviewCell = (row: number, col: number) => {
-    return dragPreviewCells.some((cell) => cell.row === row && cell.col === col);
+  const isHoverPreviewCell = (row: number, col: number) => {
+    return hoverPreviewCells.some((cell) => cell.row === row && cell.col === col);
   };
 
   return (
@@ -378,11 +331,12 @@ function ShipPlacementGrid({
       <div
         className="grid gap-1 rounded-xl border border-slate-700 bg-slate-900/70 p-2"
         style={{ gridTemplateColumns: `repeat(${board.size}, minmax(0, 1fr))` }}
+        onMouseLeave={() => setHoverCoord(null)}
       >
         {board.cells.flatMap((row) =>
           row.map((cell) => {
             const isShip = cell.state === "ship";
-            const isPreviewCell = isDragging && isDragPreviewCell(cell.row, cell.col);
+            const isPreviewCell = isHoverPreviewCell(cell.row, cell.col);
             const isDraggedShip = draggedShipId === cell.shipId;
 
             return (
@@ -390,32 +344,25 @@ function ShipPlacementGrid({
                 key={`${cell.row}-${cell.col}`}
                 type="button"
                 data-ship-id={isShip ? cell.shipId : undefined}
-                onClick={(e) => {
-                  if (isShip) {
-                    // If clicking on a ship, toggle orientation for quick adjustment
-                    e.stopPropagation();
-                    // Optional: You can call onToggleOrientation here or implement ship-specific rotation
-                  } else {
-                    // If clicking on empty cell, place ship
-                    onCellTap({ row: cell.row, col: cell.col });
+                onClick={() => onCellClick({ row: cell.row, col: cell.col }, isShip && cell.shipId ? cell.shipId : undefined)}
+                onMouseEnter={() => {
+                  if (!isDragging) {
+                    setHoverCoord({ row: cell.row, col: cell.col });
                   }
                 }}
                 draggable={isShip}
                 className={[
-                  "relative aspect-square min-h-7 rounded-[4px] border transition-all",
+                  "relative aspect-square min-h-7 rounded-[4px] border transition-all select-none",
                   "sm:min-h-8",
-                  isShip ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
-                  isDraggedShip && isDragging ? "opacity-60" : "",
-                  isPreviewCell ? "ring-2 ring-amber-300 ring-inset" : "",
+                  isShip ? "cursor-pointer" : "cursor-pointer",
+                  isDraggedShip && isDragging ? "opacity-40" : "",
+                  isPreviewCell ? "ring-2 ring-amber-300 ring-inset bg-amber-400/20" : "",
                   getCellClasses(cell.state),
                 ].join(" ")}
                 aria-label={`cell-${cell.row}-${cell.col}`}
               >
-                {isShip && isDraggedShip && isDragging && (
-                  <div className="absolute inset-0 rounded-[4px] bg-white/30 border-2 border-white animate-pulse" />
-                )}
-                {isPreviewCell && !cell.shipId && (
-                  <div className="absolute inset-0 rounded-[4px] bg-amber-400/20 border-2 border-dashed border-amber-300" />
+                {isPreviewCell && !isShip && (
+                  <div className="pointer-events-none absolute inset-0 rounded-[4px] border-2 border-dashed border-amber-300 bg-amber-400/20" />
                 )}
               </button>
             );
